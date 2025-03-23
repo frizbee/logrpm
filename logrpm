@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# --- Arguments
+LOG_FILE=""
+AFTER_DATE=""
+BEFORE_DATE=""
+CSV_MODE=false
+GRAPH_MODE=false
+OUT_FILE=""
+BY_MODE="minute"
+PATH_FILTER=""
+SLOW_THRESHOLD=""
+SLOW_OUT_FILE=""
+SLOW_CSV_OUT=""
+NPLUS1_DETECT=false
+
+# --- Parsing flags
+for arg in "$@"; do
+  case $arg in
+    --after=*) AFTER_DATE="${arg#*=}" ;;
+    --before=*) BEFORE_DATE="${arg#*=}" ;;
+    --csv) CSV_MODE=true ;;
+    --graph) GRAPH_MODE=true ;;
+    --out=*) OUT_FILE="${arg#*=}" ;;
+    --by=*) BY_MODE="${arg#*=}" ;;
+    --path=*) PATH_FILTER="${arg#*=}" ;;
+    --slow=*) SLOW_THRESHOLD="${arg#*=}" ;;
+    --slow-out=*) SLOW_OUT_FILE="${arg#*=}" ;;
+    --slow-csv=*) SLOW_CSV_OUT="${arg#*=}" ;;
+    --nplus1) NPLUS1_DETECT=true ;;
+    *) LOG_FILE="$arg" ;;
+  esac
+done
+
+# --- Check file
+if [ -z "$LOG_FILE" ]; then
+  echo "❌ Give me log fiel. Example:"
+  echo "   logrpm log/production.log.2.gz --after=2025-03-23 --csv --graph --slow=1.5 --slow-csv=slow.csv --nplus1"
+  exit 1
+fi
+
+# --- Detect awk
+OS=$(uname)
+if [ "$OS" = "Darwin" ]; then
+  if command -v gawk >/dev/null 2>&1; then
+    AWK_CMD="gawk"
+  else
+    echo "❌ It is required GNU awk (gawk) for your MacOS"
+    echo "   Install: brew install gawk"
+    exit 1
+  fi
+else
+  AWK_CMD="awk"
+fi
+
+# --- Read logs
+read_log() {
+  [[ "$LOG_FILE" == *.gz ]] && zcat "$LOG_FILE" || cat "$LOG_FILE"
+}
+
+# --- Generate RPM (by minutes and hours)
+get_rpm_data() {
+  read_log | grep "Started" | \
+    ( [ -n "$PATH_FILTER" ] && grep "$PATH_FILTER" || cat ) | \
+    $AWK_CMD -F ' at ' '{print $2}' | \
+    grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | \
+    ( [ "$BY_MODE" = "hour" ] && cut -c1-13 || cut -c1-16 ) | \
+    ( [ -n "$AFTER_DATE" ] && $AWK_CMD -v d="$AFTER_DATE" '$1 >= d' || cat ) | \
+    ( [ -n "$BEFORE_DATE" ] && $AWK_CMD -v d="$BEFORE_DATE" '$1 <= d' || cat ) | \
+    sort | uniq -c | sort
+}
+
+data=$(get_rpm_data)
+
+# --- CSV or text print RPM
+if $CSV_MODE; then
+  {
+    echo "count,timestamp"
+    echo "$data" | $AWK_CMD '{print $1","$2" "$3}'
+  } > "${OUT_FILE:-/dev/stdout}"
+else
+  echo "$data"
+fi
+
+# --- ASCII graph
+if $GRAPH_MODE; then
+  echo -e "\n📊 Graph by $BY_MODE:"
+  echo "$data" | while read count d1 d2; do
+    bar=$(printf "%${count}s" | tr ' ' '█')
+    printf "%s %s %s\n" "$d1" "$d2" "$bar"
+  done
+fi
+
+# --- Slow requests
+if [ -n "$SLOW_THRESHOLD" ]; then
+  echo -e "\n🐢 Slow requests > ${SLOW_THRESHOLD}s"
+
+  read_log | $AWK_CMD -v slow="$SLOW_THRESHOLD" -v csvfile="$SLOW_CSV_OUT" '
+    /Started/ {
+      start = $0
+      method = ""; path = ""; timestamp = ""
+      if (match($0, /Started ([A-Z]+) "([^"]+)" .* at ([0-9\-:T ]+)/, m)) {
+        method = m[1]; path = m[2]; timestamp = m[3]
+      }
+      next
+    }
+    /Completed/ {
+      if (match($0, /in ([0-9.]+)ms/, m)) {
+        ms = m[1]; sec = ms / 1000.0
+        if (sec > slow) {
+          print start "\n" $0 "\n"
+          if (csvfile != "") {
+            print timestamp "," ms "," method "," path >> csvfile
+          }
+        }
+      }
+    }
+  ' | tee "${SLOW_OUT_FILE:-/dev/null}"
+
+  if [ -n "$SLOW_CSV_OUT" ]; then
+    echo "📤 CSV saved: $SLOW_CSV_OUT"
+  fi
+fi
+
+# --- N+1 SELECT
+if $NPLUS1_DETECT; then
+  echo -e "\n🕵️ Search N+1 SELECT"
+  read_log | grep "^  SELECT" | \
+    sed 's/  SELECT .* FROM \([^ ]*\).*/\1/' | \
+    uniq -c | sort -nr | $AWK_CMD '$1 > 5 {print "🔥 Looks like N+1: " $2 " x"$1}'
+fi
