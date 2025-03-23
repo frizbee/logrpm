@@ -1,6 +1,3 @@
-Absolutely! Here's a clean and complete **Markdown `README.md`** in English for your `logrpm` project. It documents all features, flags, and usage examples — ideal for putting into your repo or sharing with your team.
-
----
 
 ## 📘 `logrpm` — Rails Log Analyzer for RPM, Slow Queries, and N+1 Detection
 
@@ -162,6 +159,3 @@ source ~/.bashrc
 
 MIT License (feel free to modify, improve, or contribute)
 
----
-
-Would you like this as an actual `README.md` file ready to download? Or need a second version in Russian for internal teams?
