@@ -1,4 +1,3 @@
-
 ## 📘 `logrpm` — Rails Log Analyzer for RPM, Slow Queries, and N+1 Detection
 
 **`logrpm`** is a CLI tool for analyzing Ruby on Rails logs (e.g., `production.log`, `development.log`, and `.gz` archives).  
